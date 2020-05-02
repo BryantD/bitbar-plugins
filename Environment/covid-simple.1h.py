@@ -107,7 +107,7 @@ def format_data(daily_data, state, tracker_data):
     mb_text += f"{state} 3 Day Average: {three_day_average:.2f} | color=black\n"
     mb_text += f"{state} 14 Day Graph: {death_sparkline} | color=black\n"
     mb_text += f"Data: {tracker_data['name']} | href='{tracker_data['credit_uri']}'"
-x
+
     return mb_text
 
 
