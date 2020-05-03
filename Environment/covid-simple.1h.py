@@ -25,8 +25,8 @@
 # <bitbar.title>COVID-19 Tracker</bitbar.title>
 # <bitbar.version>v1.0</bitbar.version>
 # <bitbar.author>Bryant Durrell</bitbar.author>
-# <bitbar.author.github>bdurrell</bitbar.author.github>
-# <bitbar.desc>Shows corona virus data from https://covidtracking.com/</bitbar.desc>
+# <bitbar.author.github>BryantD</bitbar.author.github>
+# <bitbar.desc>Shows COVID-19 data from the usual sources</bitbar.desc>
 # <bitbar.dependencies>python3, requests, pygal</bitbar.dependencies>
 # <bitbar.image>XXX</bitbar.image>
 # <bitbar.abouturl>XXX</bitbar.abouturl>
@@ -40,10 +40,12 @@
 # Install via pip:  `pip install requests pygal`
 
 #### DATA
-# This script retrieves data from the COVID Tracking Project API, available at:
-# https://covidtracking.com/api
+# This script retrieves data from:
+# The COVID Tracking Project API, available at:
+#   https://covidtracking.com/api / https://github.com/COVID19Tracking
 #
-# GitHub: https://github.com/COVID19Tracking
+# The JHU CSSE COVID-19 Data Repository, available at:
+#   https://github.com/CSSEGISandData/COVID-19
 
 #### CONFIGURATION
 # Look for the configure() function. I'd do a config file but this is
@@ -52,6 +54,42 @@
 import requests
 import csv
 import pygal
+
+
+def configure():
+    # data_provider: 
+    #   COVID_Tracking or JHU
+    # states:
+    #   use abbreviations for COVID_Tracking
+    #   use the full state name for JHU
+    # countries:
+    #   use "US" or nothing for COVID_Tracking (no other country data is available)
+    #   use the full country name for JHU (check their data repo for spellings as needed)
+
+    # edit this
+    conf = {
+        "states": ["WA", "MA"],
+        "countries": ["US"],
+        "data_provider": "COVID_Tracking",
+    }
+    
+    # don't touch this
+    conf['trackers'] = {
+        "COVID_Tracking": {
+            "name": "COVID Tracking Project",
+            "abbr": "ctp",
+            "data_uri": "https://covidtracking.com/api/v1",
+            "credit_uri": "https://covidtracking.com/",
+        },
+        "JHU": {
+            "name": "JHU CSSE COVID-19 Data Repository",
+            "abbr": "jhu",
+            "data_uri": "https://github.com/CSSEGISandData/COVID-19",
+            "credit_uri": "https://coronavirus.jhu.edu/",
+        },
+    }
+
+    return conf
 
 
 def show_menubar():
@@ -69,8 +107,17 @@ def show_data(stats):
     print(f"{stats}")
 
 
-def get_state_data(api, state):
+# Expected data returned by XXX_get_state_data functions:
+# {
+#   '2020-01-01': {
+#       'death_increase': XXX,
+#       'case_increase': XXX,
+#   }
+# }
 
+
+def ctp_get_state_data(api, state):
+    state_data = {}
     r = requests.get(f"{api}/states/{state}/daily.csv")
 
     if r.status_code == 200:
@@ -78,73 +125,114 @@ def get_state_data(api, state):
         csv_reader = csv.DictReader(content.splitlines(), delimiter=",")
         csv_data = list(csv_reader)[:14]
 
-        return r.status_code, csv_data
+        for row in csv_data:
+            date_stamp = f"{row['date'][0:4]}-{row['date'][4:6]}-{row['date'][6:8]}"
+            state_data[date_stamp] = {
+                "death_increase": row["deathIncrease"],
+                "case_increase": row["positiveIncrease"],
+            }
+
+        return r.status_code, state_data
 
     else:
         return r.status_code, "[Failed]"
 
 
-def format_data(daily_data, state, tracker_data):
+def ctp_get_country_data(api):
+
+    return r.status_code, csv_data
+
+
+def format_state_data(daily_data, state):
     deaths_by_day = []
-    for row in daily_data:
-        deaths_by_day.append(int(row["deathIncrease"]))
+    cases_by_day = []
+    
+    good_color = "green"
+    bad_color = "darkred"
+    
+    indent = "--"
 
-    last_death_increase = daily_data[0]["deathIncrease"]
-    last_date = daily_data[0]["date"]
+    for day in sorted(daily_data.keys()):
+        deaths_by_day.append(int(daily_data[day]["death_increase"]))
+        cases_by_day.append(int(daily_data[day]["case_increase"]))
 
-    three_day_average = sum(deaths_by_day[0:3]) / 3
+        last_death_increase = daily_data[day]["death_increase"]
+        last_case_increase = daily_data[day]["case_increase"]
+        last_date = day
 
-    if three_day_average > int(last_death_increase):
-        color = "green"
+    three_day_death_average = sum(deaths_by_day[0:3]) / 3
+    three_day_case_average = sum(cases_by_day[0:3]) / 3
+
+    if three_day_death_average > int(last_death_increase):
+        death_color = good_color
     else:
-        color = "red"
+        death_color = bad_color
+
+    if three_day_case_average > int(last_case_increase):
+        case_color = good_color
+    else:
+        case_color = bad_color
+
+    if death_color == bad_color or case_color == bad_color:
+        state_color = bad_color
+        state_emoji = ":arrow_upper_right:"
+    else:
+        state_color = good_color
+        state_emoji = ":arrow_lower_right:"
 
     death_chart = pygal.Line()
     death_chart.add("", deaths_by_day)
     death_sparkline = death_chart.render_sparktext()
 
-    mb_text = f"{state} New Deaths on {last_date[0:4]}-{last_date[4:6]}-{last_date[6:8]}: {last_death_increase} | color={color}\n"
-    mb_text += f"{state} 3 Day Average: {three_day_average:.2f} | color=black\n"
-    mb_text += f"{state} 14 Day Graph: {death_sparkline} | color=black\n"
-    mb_text += f"Data: {tracker_data['name']} | href='{tracker_data['credit_uri']}'"
+    case_chart = pygal.Line()
+    case_chart.add("", cases_by_day)
+    case_sparkline = case_chart.render_sparktext()
+
+    mb_text = f"{state} {state_emoji}| color={state_color}\n"
+
+    mb_text += (
+        f"{indent}New Deaths on {last_date}: {last_death_increase} | color={death_color}\n"
+    )
+    mb_text += f"{indent}3 Day Average: {three_day_death_average:.2f} | color=black\n"
+    mb_text += f"{indent}14 Day Graph: {death_sparkline} | color=black\n"
+
+    mb_text += (
+        f"{indent}New Cases on {last_date}: {last_case_increase} | color={case_color}\n"
+    )
+    mb_text += f"{indent}3 Day Average: {three_day_case_average:.2f} | color=black\n"
+    mb_text += f"{indent}14 Day Graph: {case_sparkline} | color=black"
 
     return mb_text
 
 
-def configure():
-    conf = {"state": "WA", "data_provider": "COVID_Tracking"}
-
-    return conf
+def show_credits(tracker_data):
+    print(f"Data: {tracker_data['name']} | href='{tracker_data['credit_uri']}'")
 
 
 def main():
-    trackers = {
-        "COVID_Tracking": {
-            "name": "COVID Tracking Project",
-            "data_uri": "https://covidtracking.com/api/v1",
-            "credit_uri": "https://covidtracking.com/",
-        },
-        "JHU": {
-            "name": "JHU CSSE COVID-19 Data Repository",
-            "data_uri": "https://github.com/CSSEGISandData/COVID-19",
-            "credit_uri": "https://coronavirus.jhu.edu/",
-        },
-    }
-
     conf = configure()
+    trackers = conf["trackers"]
 
-    status_code, stats = get_state_data(
-        trackers[conf["data_provider"]]["data_uri"], conf["state"]
-    )
-    if status_code == 200:
-        show_data(format_data(stats, conf["state"], trackers[conf["data_provider"]]))
-    else:
-        show_error(status_code)
+    get_state_data = globals()[
+        f"{trackers[conf['data_provider']]['abbr']}_get_state_data"
+    ]
+    get_country_data = globals()[
+        f"{trackers[conf['data_provider']]['abbr']}_get_country_data"
+    ]
+
+    show_menubar()
+
+    for state in conf["states"]:
+        status_code, stats = get_state_data(
+            trackers[conf["data_provider"]]["data_uri"], state
+        )
+        if status_code == 200:
+            show_data(format_state_data(stats, state))
+        else:
+            show_error(status_code)
+
+    show_credits(trackers[conf["data_provider"]])
 
 
 if __name__ == "__main__":
     main()
-
-# date,state,positive,negative,pending,hospitalizedCurrently,hospitalizedCumulative,inIcuCurrently,inIcuCumulative,onVentilatorCurrently,onVentilatorCumulative,recovered,hash,dateChecked,death,hospitalized,total,totalTestResults,posNeg,fips,deathIncrease,hospitalizedIncrease,negativeIncrease,positiveIncrease,totalTestResultsIncrease
-# 20200429,WA,13842,168673,,490,,156,,,,,af0bcc6ea3de117f946fdf97b697b4411aee928a,2020-04-29T20:00:00Z,786,,182515,182515,182515,53,21,0,2680,156,2836
-# 20200428,WA,13686,165993,,436,,158,,,,,1a91d4a0c3ecebe8a321950c713fa1ea82dc7cdd,2020-04-28T20:00:00Z,765,,179679,179679,179679,53,16,0,4037,165,4202
