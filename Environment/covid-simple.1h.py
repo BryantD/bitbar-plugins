@@ -21,6 +21,9 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
+#
+# The menubar icon is licensed from Font Awesome under a CC BY 4.0 License 
+# (https://creativecommons.org/licenses/by/4.0/)
 
 # <bitbar.title>COVID-19 Tracker</bitbar.title>
 # <bitbar.version>v1.0</bitbar.version>
@@ -36,7 +39,7 @@
 # than I wanted. But they're perfectly decent plugins.
 
 #### DEPENDENCIES
-# This script requires python modules requests and pygal
+# This script requires python modules requests and optionally pygal
 # Install via pip:  `pip install requests pygal`
 
 #### DATA
@@ -48,16 +51,20 @@
 #   https://github.com/CSSEGISandData/COVID-19
 
 #### CONFIGURATION
-# Look for the configure() function. I'd do a config file but this is
+# Look for the configure() function a few lines down. I'd do a config file but this is
 # how BitBar rolls.
 
 import requests
 import csv
-import pygal
-
+try:
+    pygal_loaded = True
+    import pygal
+except ImportError:
+    pygal_loaded = False
+    pass
 
 def configure():
-    # data_provider: 
+    # data_provider:
     #   COVID_Tracking or JHU
     # states:
     #   use abbreviations for COVID_Tracking
@@ -72,9 +79,9 @@ def configure():
         "countries": ["US"],
         "data_provider": "COVID_Tracking",
     }
-    
+
     # don't touch this
-    conf['trackers'] = {
+    conf["trackers"] = {
         "COVID_Tracking": {
             "name": "COVID Tracking Project",
             "abbr": "ctp",
@@ -84,7 +91,7 @@ def configure():
         "JHU": {
             "name": "JHU CSSE COVID-19 Data Repository",
             "abbr": "jhu",
-            "data_uri": "https://github.com/CSSEGISandData/COVID-19",
+            "data_uri": "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series",
             "credit_uri": "https://coronavirus.jhu.edu/",
         },
     }
@@ -99,15 +106,15 @@ def show_menubar():
     print("---")
 
 
-def show_error(status_code):
-    print(f"API error: {status_code}")
+def show_error(status_code, error):
+    print(f"Error {status_code}: {error}")
 
 
 def show_data(stats):
     print(f"{stats}")
 
 
-# Expected data returned by XXX_get_state_data functions:
+# Expected data format returned by XXX_get_state_data functions:
 # {
 #   '2020-01-01': {
 #       'death_increase': XXX,
@@ -115,10 +122,13 @@ def show_data(stats):
 #   }
 # }
 
+# COVID Tracking Project uses basically the same API for states and the US, so share
+# most of the code
 
-def ctp_get_state_data(api, state):
-    state_data = {}
-    r = requests.get(f"{api}/states/{state}/daily.csv")
+
+def ctp_get_data(api):
+    daily_data = {}
+    r = requests.get(api)
 
     if r.status_code == 200:
         content = r.content.decode("utf-8")
@@ -127,29 +137,113 @@ def ctp_get_state_data(api, state):
 
         for row in csv_data:
             date_stamp = f"{row['date'][0:4]}-{row['date'][4:6]}-{row['date'][6:8]}"
-            state_data[date_stamp] = {
+            daily_data[date_stamp] = {
                 "death_increase": row["deathIncrease"],
                 "case_increase": row["positiveIncrease"],
             }
 
-        return r.status_code, state_data
+        return r.status_code, daily_data
 
     else:
         return r.status_code, "[Failed]"
 
 
-def ctp_get_country_data(api):
+def ctp_get_state_data(api, state):
+    status_code, state_data = ctp_get_data(f"{api}/states/{state}/daily.csv")
+    return status_code, state_data
 
-    return r.status_code, csv_data
+
+def ctp_get_country_data(api, country):
+    if country != "US":
+        return 404, "[COVID Tracking Project does not include non-US data]"
+
+    status_code, country_data = ctp_get_data(f"{api}/us/daily.csv")
+    return status_code, country_data
 
 
-def format_state_data(daily_data, state):
+# JHU notes:
+# csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv
+# UID,iso2,iso3,code3,FIPS,Admin2,Province_State,Country_Region,Lat,Long_,Combined_Key,Population,1/22/20, ...
+
+# csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv
+# Province/State,Country/Region,Lat,Long,1/22/20, ...
+
+# csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv
+# UID,iso2,iso3,code3,FIPS,Admin2,Province_State,Country_Region,Lat,Long_,Combined_Key,1/22/20, ...
+
+# csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv
+# Province/State,Country/Region,Lat,Long,1/22/20, ...
+
+# The JHU data is formatted differently between states, global, deaths, and cases, so
+# less common ground for functions
+
+
+def jhu_get_state_data(api, state):
+    daily_data = {}
+    death_data = requests.get(f"{api}/time_series_covid19_deaths_US.csv")
+    case_data = requests.get(f"{api}/time_series_covid19_confirmed_US.csv")
+
+    if (death_data.status_code == 200) and (case_data.status_code == 200):
+        death_content = death_data.content.decode("utf-8")
+        death_csv_reader = csv.DictReader(death_content.splitlines(), delimiter=",")
+        death_csv_data = list(death_csv_reader)
+        case_content = case_data.content.decode("utf-8")
+        case_csv_reader = csv.DictReader(case_content.splitlines(), delimiter=",")
+        case_csv_data = list(death_csv_reader)
+
+        # This assumes death and case files will always have the same dates;
+        # that could be untrue
+        dates = death_csv_data[0][-14:]
+
+        for row in death_csv_data:
+            state_death_data = []
+            if row[6] == state:
+                county_death_data = row[-14:]
+                state_death_data = [
+                    x + y for x, y in zip(county_death_data, state_death_data)
+                ]
+
+        for row in case_csv_data:
+            state_case_data = []
+            if row[6] == state:
+                county_case_data = row[-14:]
+                state_case_data = [
+                    x + y for x, y in zip(county_case_data, state_case_data)
+                ]
+
+        for day in range(0, 14):
+            date_stamp = f"{dates[day]}"
+            daily_data[date_stamp] = {
+                "death_increase": state_death_data[day],
+                "case_increase": state_case_data[day],
+            }
+
+        return r.status_code, daily_data
+
+    else:
+        if case_data.status_code != 200:
+            return case_data.status_code, "[Failed]"
+        else:
+            return death_data.status_code, "[Failed]"
+
+
+def jhu_get_country_data(api, state):
+    return True
+
+
+def make_sparkline(data_by_day):
+    chart = pygal.Line()
+    chart.add("", data_by_day)
+    return chart.render_sparktext()
+
+
+def format_data(daily_data, political_unit):
     deaths_by_day = []
     cases_by_day = []
-    
+
     good_color = "green"
     bad_color = "darkred"
-    
+
     indent = "--"
 
     for day in sorted(daily_data.keys()):
@@ -174,35 +268,36 @@ def format_state_data(daily_data, state):
         case_color = bad_color
 
     if death_color == bad_color or case_color == bad_color:
-        state_color = bad_color
-        state_emoji = ":arrow_upper_right:"
+        unit_color = bad_color
+        unit_emoji = ":arrow_upper_right:"
     else:
-        state_color = good_color
-        state_emoji = ":arrow_lower_right:"
+        unit_color = good_color
+        unit_emoji = ":arrow_lower_right:"
 
-    death_chart = pygal.Line()
-    death_chart.add("", deaths_by_day)
-    death_sparkline = death_chart.render_sparktext()
+    mb_text = f"{political_unit} {unit_emoji}| color={unit_color}\n"
 
-    case_chart = pygal.Line()
-    case_chart.add("", cases_by_day)
-    case_sparkline = case_chart.render_sparktext()
-
-    mb_text = f"{state} {state_emoji}| color={state_color}\n"
-
-    mb_text += (
-        f"{indent}New Deaths on {last_date}: {last_death_increase} | color={death_color}\n"
-    )
+    mb_text += f"{indent}New Deaths on {last_date}: {last_death_increase} | color={death_color}\n"
     mb_text += f"{indent}3 Day Average: {three_day_death_average:.2f} | color=black\n"
-    mb_text += f"{indent}14 Day Graph: {death_sparkline} | color=black\n"
+    if pygal_loaded:
+        mb_text += f"{indent}14 Day Graph: {make_sparkline(deaths_by_day)} | color=black\n"
 
     mb_text += (
         f"{indent}New Cases on {last_date}: {last_case_increase} | color={case_color}\n"
     )
     mb_text += f"{indent}3 Day Average: {three_day_case_average:.2f} | color=black\n"
-    mb_text += f"{indent}14 Day Graph: {case_sparkline} | color=black"
+    if pygal_loaded:
+        mb_text += f"{indent}14 Day Graph: {make_sparkline(cases_by_day)} | color=black"
 
     return mb_text
+
+
+# Split the code path just in case states and countries ever need different formatting
+def format_state_data(daily_data, state):
+    return format_data(daily_data, state)
+
+
+def format_country_data(daily_data, country):
+    return format_data(daily_data, country)
 
 
 def show_credits(tracker_data):
@@ -222,6 +317,18 @@ def main():
 
     show_menubar()
 
+    # Obviously some repetition here but I wanted to allow for country APIs that
+    # differ from state APIs
+
+    for country in conf["countries"]:
+        status_code, stats = get_country_data(
+            trackers[conf["data_provider"]]["data_uri"], country
+        )
+        if status_code == 200:
+            show_data(format_country_data(stats, country))
+        else:
+            show_error(status_code, stats)
+
     for state in conf["states"]:
         status_code, stats = get_state_data(
             trackers[conf["data_provider"]]["data_uri"], state
@@ -229,7 +336,7 @@ def main():
         if status_code == 200:
             show_data(format_state_data(stats, state))
         else:
-            show_error(status_code)
+            show_error(status_code, stats)
 
     show_credits(trackers[conf["data_provider"]])
 
